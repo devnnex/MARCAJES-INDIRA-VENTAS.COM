@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Liquidaciones Vikingos</title>
+<link rel="stylesheet" href="style.css">
+
+
+  <!-- 🧩 Favicon clásico -->
+  <link rel="icon" type="image/png" href="./images/favicon.png">
+
+  <!-- 📱 Ícono de app (iOS / Android) -->
+  <link rel="apple-touch-icon" href="./images/favicon.png">
+
+  <!-- 🧭 Configuración PWA -->
+  <meta name="theme-color" content="#52dec8">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Marcajes Indira">
+
+  <!-- 📜 Manifest -->
+  <link rel="manifest" href="./manifest.json">
+</head>
+
+<body>
+
+<div class="app">
+
+  <aside class="sidebar">
+    <h2>PERSONAL DE VENTAS</h2>
+    <nav>
+      <button class="nav-btn" data-section="dashboard" onclick="showSection('dashboard')">Dashboard</button>
+      <button class="nav-btn" data-section="history" onclick="showSection('history')">Historial</button>
+      <button class="nav-btn" data-section="workers" onclick="showSection('workers')">Trabajadores</button>
+      <button class="nav-btn active" data-section="time" onclick="showSection('time')">Marcajes</button>
+      <!-- <button class="nav-btn" data-section="liquidations" onclick="showSection('liquidations')">Liquidaciones</button>
+      <button class="nav-btn" data-section="history" onclick="showSection('history')">Historial</button> -->
+    </nav>
+  </aside>
+
+  <main class="main">
+
+    <header class="header">
+      <h1>Liquidaciones Indira Gourmet</h1>
+      <div class="rate-box hidden-by-section" id="rateBox">
+        <div class="rate-copy">
+          <span class="rate-label">Valor por hora</span>
+          <strong id="currentRateValue">Sin definir</strong>
+        </div>
+        <input id="hourRate" placeholder="Agrega el nuevo valor por hora">
+        <button class="accent-btn" onclick="saveRate()">Guardar</button>
+      </div>
+    </header>
+
+    <!-- DASHBOARD -->
+    <section id="dashboard" class="section">
+      <div class="dashboard-shell">
+        <div class="dashboard-hero">
+          <div class="dashboard-copy">
+            <span class="section-eyebrow">Resumen general</span>
+            <h2>Vista financiera del sistema</h2>
+            <p>Monitorea el estado operativo, las horas acumuladas y el valor total pendiente por pagar con una presentacion mas clara y profesional.</p>
+          </div>
+
+          <div class="dashboard-highlight">
+            <span class="highlight-label">Total a pagar</span>
+            <strong id="kpiPay"></strong>
+            <small>Valor acumulado en pesos colombianos</small>
+          </div>
+        </div>
+
+        <div class="kpi-grid premium-grid">
+          <div class="kpi-card premium-card">
+            <span class="kpi-label">Trabajadores</span>
+            <strong id="kpiWorkers"></strong>
+            <p>Personal registrado en el sistema</p>
+          </div>
+
+          <div class="kpi-card premium-card">
+            <span class="kpi-label">Horas</span>
+            <strong id="kpiHours"></strong>
+            <p>Total de horas acumuladas</p>
+          </div>
+
+          <div class="kpi-card premium-card">
+            <span class="kpi-label">Liquidaciones</span>
+            <strong id="kpiMonth"></strong>
+            <p>Seguimiento del ciclo actual</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- WORKERS -->
+    <section id="workers" class="section">
+      <div class="workers-header">
+        <h2>Trabajadores</h2>
+        <button class="refresh-workers-btn" onclick="refreshWorkers()">
+          <span class="refresh-icon" aria-hidden="true">↻</span>
+          <span>Refrescar</span>
+        </button>
+      </div>
+
+      <div class="form-grid">
+        <input id="name" placeholder="Nombre">
+        <input id="phone" placeholder="Teléfono">
+        <input id="email" placeholder="Correo">
+        <button class="add-worker-btn accent-btn" onclick="addWorker()">Agregar</button>
+      </div>
+
+      <input id="workerSearch" placeholder="Buscar trabajador..." oninput="handleWorkerSearch()">
+      
+
+      <div id="workersCards" class="cards-grid"></div>
+    </section>
+
+    <!-- TIME -->
+    <section id="time" class="section active">
+      <div class="time-panel">
+        <div class="time-panel-header">
+          <div>
+            <span class="section-eyebrow">Control de asistencia</span>
+            <h2>Marcajes</h2>
+            <p class="section-copy">Consulta y registra movimientos por trabajador con una vista mas clara y elegante.</p>
+          </div>
+        </div>
+
+        <div class="time-box">
+          <div class="attendance-shell">
+            <label class="select-shell">
+              <span>Trabajador (vista individual)</span>
+              <select id="workerSelect"></select>
+            </label>
+
+            <div class="attendance-mode">
+              <button id="modeSingleBtn" class="mode-btn active" type="button" onclick="setAttendanceMode('single')">Individual</button>
+              <button id="modeMultiBtn" class="mode-btn" type="button" onclick="setAttendanceMode('multi')">Multiple</button>
+            </div>
+
+            <div id="multiWorkerPanel" class="multi-worker-panel" aria-hidden="true">
+              <div class="multi-worker-head">
+                <strong>Seleccion multiple</strong>
+                <div class="multi-worker-shortcuts">
+                  <button type="button" onclick="toggleAllBatchWorkers(true)">Seleccionar todo</button>
+                  <button type="button" onclick="toggleAllBatchWorkers(false)">Limpiar</button>
+                  <button class="overview-shortcut-btn" type="button" onclick="openAttendanceOverviewModal()">Vista general</button>
+                </div>
+              </div>
+              <div id="multiWorkerList" class="multi-worker-list"></div>
+            </div>
+          </div>
+
+          <div class="time-actions">
+            <button class="time-btn btn-in" onclick="checkIn()">Entrada</button>
+            <button class="time-btn btn-out" onclick="checkOut()">Salida</button>
+          </div>
+        </div>
+
+        <div class="time-table-card">
+          <div class="time-table-heading">
+            <div>
+              <h3>Historial reciente</h3>
+              <p id="timeTableCaption">Selecciona un trabajador para ver sus registros.</p>
+            </div>
+          </div>
+
+          <div class="time-table-wrapper">
+            <div id="timeLoader" class="time-loader" aria-hidden="true">
+              <div class="loader-spinner"></div>
+              <span>Cargando marcajes del trabajador...</span>
+            </div>
+
+            <table class="time-table">
+              <thead>
+                <tr>
+                  <th>Trabajador</th>
+                  <th>Ingreso</th>
+                  <th>Salida</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody id="timeLogsTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LIQUIDACIONES -->
+    <section id="liquidations" class="section">
+      <h2>Liquidar trabajador</h2>
+      <select id="liquidWorker"></select>
+      <button onclick="liquidate()">Liquidar</button>
+    </section>
+
+    <section id="history" class="section">
+      <div class="history-panel">
+        <div class="history-header">
+          <div>
+            <span class="section-eyebrow">Pagos realizados</span>
+            <h2>Historial de liquidaciones</h2>
+            <p class="section-copy" id="historyCaption">Consulta las liquidaciones registradas y filtra por trabajador cuando tengas multiples pagos.</p>
+          </div>
+          <button class="refresh-workers-btn" type="button" onclick="refreshLiquidationsHistory()">
+            <span class="refresh-icon" aria-hidden="true">&#8635;</span>
+            <span>Refrescar historial</span>
+          </button>
+        </div>
+
+        <div class="history-controls">
+          <div class="history-filters">
+            <label class="select-shell">
+              <span>Filtrar por trabajador</span>
+              <select id="historyWorkerFilter">
+                <option value="all">Todos los trabajadores</option>
+              </select>
+            </label>
+
+            <label class="select-shell">
+              <span>Ir a fecha detectada</span>
+              <select id="historyDateFilter">
+                <option value="all">Todas las fechas</option>
+              </select>
+            </label>
+
+            <label class="select-shell">
+              <span>Buscar fecha</span>
+              <input id="historyDateSearch" list="historyDateSuggestions" placeholder="Ej: 21 abr 2026 o vie 21 abr 2026">
+              <datalist id="historyDateSuggestions"></datalist>
+            </label>
+          </div>
+
+          <div class="history-kpis">
+            <div class="history-kpi">
+              <span>Pagos realizados</span>
+              <strong id="historyTotalRecords">0</strong>
+            </div>
+            <div class="history-kpi">
+              <span>Total pagado</span>
+              <strong id="historyTotalAmount">$0</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="time-table-card">
+          <div class="time-table-wrapper">
+            <div id="historyLoader" class="time-loader" aria-hidden="true">
+              <div class="loader-spinner"></div>
+              <span>Cargando historial de liquidaciones...</span>
+            </div>
+
+            <table class="time-table">
+              <thead>
+                <tr>
+                  <th>Trabajador</th>
+                  <th>Fecha de pago</th>
+                  <th>Horas pagadas</th>
+                  <th>Valor pagado</th>
+                </tr>
+              </thead>
+              <tbody id="historyTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+</div>
+
+<div id="globalLoader" class="global-loader" aria-hidden="true">
+  <div class="global-loader-card">
+    <div class="loader-spinner"></div>
+    <strong id="globalLoaderTitle">Procesando cambios</strong>
+    <span id="globalLoaderText">Espera un momento mientras actualizamos la informacion.</span>
+  </div>
+</div>
+
+<!--JS AND SWEET ALERT-->
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
+
+<script>
+  emailjs.init("4JF4bFdYqWgGdPOue");
+</script>
+<script src="app.js"></script>
+</body>
+</html>
