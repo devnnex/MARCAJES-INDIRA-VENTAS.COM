@@ -1,4 +1,4 @@
-const API = "https://script.google.com/macros/s/AKfycbwfikxeaqxwfEz7M9GLmjHIupVlDrdiMAP_CqrNfEb_fG7UUvUd5ojUdyQ9rfGfmL25NA/exec";
+const API = "https://script.google.com/macros/s/AKfycbzBUHGSo3tQASa_OA9KJmY2Niqra384kgSjodshMNP-b-Dh0VyBq9lJB1fKba0sWfHQrA/exec";
 
 const COP = new Intl.NumberFormat("es-CO", {
   style: "currency",
