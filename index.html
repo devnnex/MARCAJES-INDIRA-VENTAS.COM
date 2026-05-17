@@ -106,7 +106,7 @@
       <div class="form-grid">
         <input id="name" placeholder="Nombre">
         <input id="phone" placeholder="Teléfono">
-        <input id="email" placeholder="Correo">
+        <input id="email" type="email" autocomplete="email" placeholder="Correo">
         <button class="add-worker-btn accent-btn" onclick="addWorker()">Agregar</button>
       </div>
 
@@ -281,11 +281,7 @@
 
 <!--JS AND SWEET ALERT-->
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-<script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
-
-<script>
-  emailjs.init("4JF4bFdYqWgGdPOue");
-</script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
