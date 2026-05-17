@@ -40,6 +40,15 @@ const ADMIN_PIN = "5678";
 const PROTECTED_SECTIONS = new Set(["dashboard", "workers", "history"]);
 const READ_CACHE_MS = 7000;
 const FAST_CACHE_MS = 3000;
+const EMAILJS_CONFIG = Object.freeze({
+  publicKey: "4JF4bFdYqWgGdPOue",
+  serviceId: "service_vgavcss",
+  templateId: "template_143pfyt",
+  timeoutMs: 15000,
+  rateLimitMs: 1200
+});
+
+let emailJSInitialized = false;
 
 function formatCOP(value){
   const numericValue = Number(value);
@@ -57,6 +66,17 @@ function formatHoursValue(value){
   }
 
   return Number.isInteger(numericValue) ? String(numericValue) : numericValue.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function formatEmailMoney(value){
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)){
+    return "0";
+  }
+
+  return new Intl.NumberFormat("es-CO", {
+    maximumFractionDigits: 0
+  }).format(Math.round(numericValue));
 }
 
 function showPremiumModal(options = {}){
@@ -91,6 +111,15 @@ function escapeHTML(value){
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function normalizeEmailAddress(value){
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isValidEmailAddress(value){
+  const email = normalizeEmailAddress(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
 }
 
 function getWorkerNameById(workerId){
@@ -550,7 +579,7 @@ async function addWorker(){
   const payload = {
     name: nameInput.value.trim(),
     phone: phoneInput.value.trim(),
-    email: emailInput.value.trim()
+    email: normalizeEmailAddress(emailInput.value)
   };
 
   if (!payload.name){
@@ -558,6 +587,15 @@ async function addWorker(){
       icon: "warning",
       title: "Nombre requerido",
       text: "Ingresa al menos el nombre del trabajador antes de guardar."
+    });
+    return;
+  }
+
+  if (payload.email && !isValidEmailAddress(payload.email)){
+    showPremiumModal({
+      icon: "warning",
+      title: "Correo no valido",
+      text: "Revisa el correo del trabajador antes de guardarlo."
     });
     return;
   }
@@ -819,7 +857,7 @@ async function editWorker(id, currentName, currentPhone, currentEmail){
         </label>
         <label class="apple-modal-field">
           <span>Email</span>
-          <input id="swalWorkerEmail" class="apple-modal-input-field" value="${safeEmail}" placeholder="Correo">
+          <input id="swalWorkerEmail" class="apple-modal-input-field" type="email" autocomplete="email" value="${safeEmail}" placeholder="Correo">
         </label>
       </div>
     `,
@@ -837,10 +875,15 @@ async function editWorker(id, currentName, currentPhone, currentEmail){
         return false;
       }
 
+      if (updatedEmail && !isValidEmailAddress(updatedEmail)){
+        Swal.showValidationMessage("Ingresa un correo valido o deja el campo vacio.");
+        return false;
+      }
+
       return {
         name: updatedName,
         phone: updatedPhone,
-        email: updatedEmail
+        email: normalizeEmailAddress(updatedEmail)
       };
     }
   });
@@ -1586,47 +1629,165 @@ async function loadCurrentRate(){
   return null;
 }
 
-//LIQUIDACIONES INDIRA ENVIO DEL CORREO
-function sendLiquidationEmail(worker, liquidation){
-  if (!worker?.email) return;
+function withTimeout(promise, timeoutMs, errorMessage){
+  let timeoutId;
 
-  const form = document.createElement("form");
-  form.style.display = "none";
-
-  const data = {
-    to_name: worker.name,
-    to_email: worker.email,
-    telefono: worker.phone || "No registrado",
-    horas: liquidation.hours,
-    total: liquidation.amount,
-    fecha: new Date().toLocaleDateString("es-CO"),
-    year: new Date().getFullYear()
-  };
-
-  Object.keys(data).forEach(k => {
-    const input = document.createElement("input");
-    input.type = "hidden";
-    input.name = k;
-    input.value = data[k];
-    form.appendChild(input);
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(errorMessage));
+    }, timeoutMs);
   });
 
-  document.body.appendChild(form);
+  return Promise.race([promise, timeout]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
 
-  emailjs.sendForm("service_vgavcss", "template_143pfyt", form).then(() => {
-      console.log("Correo enviado correctamente");
-    })
-    .catch(err => {
-      console.error("Error enviando correo:", err);
-    })
-    .finally(() => form.remove());
+function initEmailJS(){
+  if (emailJSInitialized){
+    return true;
+  }
+
+  if (!window.emailjs || typeof window.emailjs.send !== "function"){
+    return false;
+  }
+
+  if (typeof window.emailjs.init === "function"){
+    window.emailjs.init({
+      publicKey: EMAILJS_CONFIG.publicKey,
+      limitRate: {
+        id: "liquidation-email",
+        throttle: EMAILJS_CONFIG.rateLimitMs
+      }
+    });
+  }
+
+  emailJSInitialized = true;
+  return true;
+}
+
+function buildLiquidationEmailParams(worker, liquidation){
+  const email = normalizeEmailAddress(worker?.email);
+  const workerName = worker?.name || "Trabajador";
+  const now = new Date();
+
+  return {
+    to_name: workerName,
+    to_email: email,
+    telefono: worker?.phone || "No registrado",
+    horas: formatHoursValue(liquidation?.hours),
+    total: formatEmailMoney(liquidation?.amount),
+    fecha: now.toLocaleDateString("es-CO", {
+      year: "numeric",
+      month: "long",
+      day: "numeric"
+    }),
+    year: now.getFullYear(),
+    worker_id: worker?.id || "",
+    total_raw: Number(liquidation?.amount || 0),
+    hours_raw: Number(liquidation?.hours || 0)
+  };
+}
+
+function renderLiquidationEmailStatus(emailResult){
+  const statusText = {
+    sent: `Enviado a ${emailResult.recipient}`,
+    skipped: "Sin correo registrado",
+    invalid: "Correo no valido",
+    failed: "No se pudo enviar"
+  }[emailResult.status] || "No enviado";
+  const shouldShowDetail = emailResult.status === "failed" && emailResult.message;
+
+  return `
+    <div class="apple-liquidation-row">
+      <span>Correo de nomina</span>
+      <strong>${escapeHTML(statusText)}</strong>
+    </div>
+    ${shouldShowDetail ? `
+      <div class="apple-liquidation-row apple-liquidation-row-note">
+        <span>Detalle EmailJS</span>
+        <strong>${escapeHTML(emailResult.message)}</strong>
+      </div>
+    ` : ""}
+  `;
+}
+
+async function sendLiquidationEmail(worker, liquidation){
+  const email = normalizeEmailAddress(worker?.email);
+
+  if (!email){
+    return {
+      status: "skipped",
+      recipient: "",
+      message: "El trabajador no tiene correo registrado."
+    };
+  }
+
+  if (!isValidEmailAddress(email)){
+    return {
+      status: "invalid",
+      recipient: email,
+      message: "El correo registrado no tiene un formato valido."
+    };
+  }
+
+  if (!initEmailJS()){
+    return {
+      status: "failed",
+      recipient: email,
+      message: "EmailJS no esta disponible en esta pagina."
+    };
+  }
+
+  const params = buildLiquidationEmailParams({
+    ...worker,
+    email
+  }, liquidation);
+
+  try {
+    await withTimeout(
+      window.emailjs.send(
+        EMAILJS_CONFIG.serviceId,
+        EMAILJS_CONFIG.templateId,
+        params,
+        {
+          publicKey: EMAILJS_CONFIG.publicKey
+        }
+      ),
+      EMAILJS_CONFIG.timeoutMs,
+      "EmailJS tardo demasiado en responder."
+    );
+
+    return {
+      status: "sent",
+      recipient: email,
+      message: "Correo enviado correctamente."
+    };
+  } catch (error){
+    console.error("Error enviando correo de liquidacion:", error);
+
+    return {
+      status: "failed",
+      recipient: email,
+      message: error?.text || error?.message || "EmailJS rechazo el envio."
+    };
+  }
 }
 
 
 // FUNCION QUE LIQUIDA AL TRABAJADOR 
 async function liquidate(workerId){
   const targetWorker = workerId || liquidWorker.value;
-  const targetWorkerId = String(targetWorker);
+  const targetWorkerId = String(targetWorker || "").trim();
+
+  if (!targetWorkerId){
+    await showPremiumModal({
+      icon: "warning",
+      title: "Trabajador requerido",
+      text: "Selecciona un trabajador antes de liquidar."
+    });
+    return;
+  }
 
   const targetWorkerData = currentWorkers.find(
     worker => String(worker.id) === targetWorkerId
@@ -1638,9 +1799,7 @@ async function liquidate(workerId){
   });
 
   try {
-    const result = await api("liquidateWorker", { worker: targetWorker });
-
-    setGlobalLoader(false);
+    const result = await api("liquidateWorker", { worker: targetWorkerId });
 
     // 🔹 Datos de liquidación
     const liquidationData = {
@@ -1649,26 +1808,38 @@ async function liquidate(workerId){
     };
 
     // 🔥 ENVÍO DE CORREO (solo si tiene email)
-    if (targetWorkerData?.email) {
-      sendLiquidationEmail(targetWorkerData, liquidationData);
-    } else {
-      console.warn("El trabajador no tiene correo");
-    }
+    const emailWorkerData = {
+      ...targetWorkerData,
+      id: targetWorkerId,
+      name: result.name || targetWorkerData?.name || "Trabajador",
+      phone: result.phone || targetWorkerData?.phone || "",
+      email: result.email || targetWorkerData?.email || ""
+    };
+
+    setGlobalLoader(true, {
+      title: "Enviando correo de nomina",
+      text: emailWorkerData.email
+        ? `Estamos enviando el resumen a ${emailWorkerData.email}.`
+        : "El trabajador no tiene correo registrado; terminaremos la liquidacion sin envio."
+    });
+
+    const emailResult = await sendLiquidationEmail(emailWorkerData, liquidationData);
+
+    setGlobalLoader(false);
 
     const liquidatedAmount = formatCOP(result.amount);
     const liquidatedHours = formatHoursValue(result.hours);
-    const workerName = escapeHTML(
-      result.name || targetWorkerData?.name || "Trabajador"
-    );
+    const workerName = escapeHTML(emailWorkerData.name);
 
     await showPremiumModal({
-      icon: "success",
+      icon: emailResult.status === "failed" ? "warning" : "success",
       title: "Liquidacion completada",
       html: `
         <div class="apple-liquidation-summary">
           <div class="apple-liquidation-row"><span>Trabajador</span><strong>${workerName}</strong></div>
           <div class="apple-liquidation-row"><span>Horas liquidadas</span><strong>${liquidatedHours} h</strong></div>
           <div class="apple-liquidation-row"><span>Total liquidado</span><strong>${liquidatedAmount}</strong></div>
+          ${renderLiquidationEmailStatus(emailResult)}
         </div>
       `
     });
@@ -1686,6 +1857,7 @@ async function liquidate(workerId){
 
   } catch (error){
     setGlobalLoader(false);
+    console.error("Error liquidando trabajador:", error);
 
     await showPremiumModal({
       icon: "error",
