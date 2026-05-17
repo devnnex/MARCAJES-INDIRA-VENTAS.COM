@@ -1465,6 +1465,19 @@ textarea{
 .apple-liquidation-row strong{
  color:#20243a;
  font-size:16px;
+ text-align:right;
+ overflow-wrap:anywhere;
+}
+
+.apple-liquidation-row-note{
+ align-items:flex-start;
+ background:rgba(255,193,7,.12);
+}
+
+.apple-liquidation-row-note strong{
+ color:#8a5b00;
+ font-size:12px;
+ line-height:1.35;
 }
 
 @keyframes appleModalEnter{
