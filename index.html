@@ -18,7 +18,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Marcajes Indira">
+  <meta name="apple-mobile-web-app-title" content="Marcajes Indira Ventas">
 
   <!-- 📜 Manifest -->
   <link rel="manifest" href="./manifest.json">
@@ -121,9 +121,9 @@
       <div class="time-panel">
         <div class="time-panel-header">
           <div>
-            <span class="section-eyebrow">Control de asistencia</span>
+            <span class="section-eyebrow">Control de salidas</span>
             <h2>Marcajes</h2>
-            <p class="section-copy">Consulta y registra movimientos por trabajador con una vista mas clara y elegante.</p>
+            <p class="section-copy">Registra la salida del trabajador y calcula la jornada diaria con turnos de 8 horas, 11 horas o una duracion manual.</p>
           </div>
         </div>
 
@@ -152,9 +152,28 @@
             </div>
           </div>
 
+          <div class="exit-shift-panel">
+            <div class="exit-shift-head">
+              <span>Jornada a pagar</span>
+              <strong id="exitShiftSummary">8 h</strong>
+            </div>
+
+            <div class="exit-shift-options" role="group" aria-label="Duracion de jornada">
+              <button id="shift8Btn" class="shift-option active" type="button" onclick="setExitShiftMode('8')">8 h</button>
+              <button id="shift11Btn" class="shift-option" type="button" onclick="setExitShiftMode('11')">11 h</button>
+              <button id="shiftManualBtn" class="shift-option" type="button" onclick="setExitShiftMode('manual')">Manual</button>
+            </div>
+
+            <label id="manualShiftField" class="manual-shift-field" aria-hidden="true">
+              <span>Horas manuales</span>
+              <input id="manualShiftHours" inputmode="decimal" placeholder="Ej: 5 o 5:30" oninput="handleManualExitHoursInput()">
+            </label>
+
+            <div class="exit-estimate" id="exitEstimate">Selecciona trabajador y jornada para ver el estimado.</div>
+          </div>
+
           <div class="time-actions">
-            <button class="time-btn btn-in" onclick="checkIn()">Entrada</button>
-            <button class="time-btn btn-out" onclick="checkOut()">Salida</button>
+            <button class="time-btn btn-out" onclick="checkOut()">Marcar salida</button>
           </div>
         </div>
 
@@ -176,7 +195,6 @@
               <thead>
                 <tr>
                   <th>Trabajador</th>
-                  <th>Ingreso</th>
                   <th>Salida</th>
                   <th>Estado</th>
                 </tr>
