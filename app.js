@@ -1,4 +1,4 @@
-const API = "https://script.google.com/macros/s/AKfycbysGsm238B_ZrajqibUUhhGaqRwDxQ-SqPi69mDUGmsqUIf7ALVzaXilmVzQl1Ku8Pv7w/exec";
+const API = "https://script.google.com/macros/s/AKfycbzfxJu_pYR4YZKnhwvYOJxSa9b7f4kLOhxvyqwoGscaJLDOjVW9AZP0bgp3qlcgVRMBsQ/exec";
 
 const COP = new Intl.NumberFormat("es-CO", {
   style: "currency",
@@ -29,6 +29,7 @@ const premiumModal = Swal.mixin({
 let currentHourRate = null;
 let currentWorkers = [];
 let attendanceMode = "single";
+let exitShiftMode = "8";
 let selectedBatchWorkers = new Set();
 let adminUnlocked = false;
 let liquidationHistory = [];
@@ -40,6 +41,11 @@ const ADMIN_PIN = "5678";
 const PROTECTED_SECTIONS = new Set(["dashboard", "workers", "history"]);
 const READ_CACHE_MS = 7000;
 const FAST_CACHE_MS = 3000;
+const EXIT_SHIFT_OPTIONS = Object.freeze({
+  "8": 8,
+  "11": 11
+});
+const MAX_MANUAL_EXIT_HOURS = 24;
 const EMAILJS_CONFIG = Object.freeze({
   publicKey: "4JF4bFdYqWgGdPOue",
   serviceId: "service_vgavcss",
@@ -66,6 +72,146 @@ function formatHoursValue(value){
   }
 
   return Number.isInteger(numericValue) ? String(numericValue) : numericValue.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function formatShiftHours(value){
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0){
+    return "0 h";
+  }
+
+  const totalMinutes = Math.round(numericValue * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (!minutes){
+    return `${hours} h`;
+  }
+
+  return `${hours} h ${String(minutes).padStart(2, "0")} min`;
+}
+
+function parseExitHoursInput(value){
+  const rawValue = String(value ?? "").trim();
+  if (!rawValue){
+    return null;
+  }
+
+  if (rawValue.includes(":")){
+    const [hoursPart, minutesPart = "0"] = rawValue.split(":");
+    const hours = Number(hoursPart.replace(",", "."));
+    const minutes = Number(minutesPart.replace(",", "."));
+
+    if (
+      Number.isFinite(hours) &&
+      Number.isFinite(minutes) &&
+      hours >= 0 &&
+      minutes >= 0 &&
+      minutes < 60
+    ){
+      return hours + (minutes / 60);
+    }
+
+    return null;
+  }
+
+  const numericValue = Number(rawValue.replace(",", "."));
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function getSelectedExitHours(){
+  if (exitShiftMode === "manual"){
+    return parseExitHoursInput(document.getElementById("manualShiftHours")?.value);
+  }
+
+  return EXIT_SHIFT_OPTIONS[exitShiftMode] || EXIT_SHIFT_OPTIONS["8"];
+}
+
+function getPayrollRateForWorker(workerId){
+  const worker = currentWorkers.find(item => String(item.id) === String(workerId));
+  return getWorkerHourlyRate(worker) || currentHourRate || 0;
+}
+
+function getSelectedExitWorkerIds(){
+  return getSelectedAttendanceWorkerIds();
+}
+
+function calculateExitEstimate(hours){
+  const selectedWorkerIds = getSelectedExitWorkerIds();
+  return selectedWorkerIds.reduce((total, workerId) => {
+    const hourlyRate = getPayrollRateForWorker(workerId);
+    return total + (Number(hours || 0) * hourlyRate);
+  }, 0);
+}
+
+function updateExitShiftUI(){
+  const selectedHours = getSelectedExitHours();
+  const isValidHours = Number.isFinite(selectedHours) && selectedHours > 0 && selectedHours <= MAX_MANUAL_EXIT_HOURS;
+  const shiftSummary = document.getElementById("exitShiftSummary");
+  const estimateBox = document.getElementById("exitEstimate");
+  const manualField = document.getElementById("manualShiftField");
+
+  ["8", "11", "manual"].forEach(mode => {
+    const button = document.getElementById(`shift${mode === "manual" ? "Manual" : mode}Btn`);
+    if (button){
+      button.classList.toggle("active", exitShiftMode === mode);
+    }
+  });
+
+  if (manualField){
+    const isManual = exitShiftMode === "manual";
+    manualField.classList.toggle("visible", isManual);
+    manualField.setAttribute("aria-hidden", String(!isManual));
+  }
+
+  if (shiftSummary){
+    shiftSummary.textContent = isValidHours ? formatShiftHours(selectedHours) : "Revisar";
+  }
+
+  if (!estimateBox){
+    return;
+  }
+
+  const selectedWorkerIds = getSelectedExitWorkerIds();
+  if (!selectedWorkerIds.length){
+    estimateBox.textContent = "Selecciona al menos un trabajador para calcular el pago.";
+    estimateBox.classList.remove("warning");
+    return;
+  }
+
+  if (!isValidHours){
+    estimateBox.textContent = `Ingresa una duracion mayor a 0 y maximo ${MAX_MANUAL_EXIT_HOURS} horas.`;
+    estimateBox.classList.add("warning");
+    return;
+  }
+
+  const missingRates = selectedWorkerIds.filter(workerId => getPayrollRateForWorker(workerId) <= 0);
+  if (missingRates.length){
+    estimateBox.textContent = "Falta configurar el valor por hora para calcular la nomina.";
+    estimateBox.classList.add("warning");
+    return;
+  }
+
+  const total = calculateExitEstimate(selectedHours);
+  const workerText = selectedWorkerIds.length === 1 ? "1 trabajador" : `${selectedWorkerIds.length} trabajadores`;
+  estimateBox.textContent = `${workerText} - ${formatShiftHours(selectedHours)} - Estimado ${formatCOP(total)}`;
+  estimateBox.classList.remove("warning");
+}
+
+function setExitShiftMode(mode){
+  exitShiftMode = mode === "manual" ? "manual" : (EXIT_SHIFT_OPTIONS[mode] ? mode : "8");
+  updateExitShiftUI();
+
+  if (exitShiftMode === "manual"){
+    const manualInput = document.getElementById("manualShiftHours");
+    if (manualInput){
+      manualInput.focus();
+    }
+  }
+}
+
+function handleManualExitHoursInput(){
+  updateExitShiftUI();
 }
 
 function formatEmailMoney(value){
@@ -153,6 +299,7 @@ function setAttendanceMode(mode = "single"){
   }
 
   renderMultiWorkerList(currentWorkers);
+  updateExitShiftUI();
 }
 
 function handleBatchWorkerToggle(workerId, isSelected){
@@ -166,12 +313,15 @@ function handleBatchWorkerToggle(workerId, isSelected){
   } else {
     selectedBatchWorkers.delete(normalizedId);
   }
+
+  updateExitShiftUI();
 }
 
 function toggleAllBatchWorkers(shouldSelect){
   const workerIds = currentWorkers.map(worker => String(worker.id));
   selectedBatchWorkers = shouldSelect ? new Set(workerIds) : new Set();
   renderMultiWorkerList(currentWorkers);
+  updateExitShiftUI();
 }
 
 function renderMultiWorkerList(workers = []){
@@ -341,6 +491,8 @@ function renderCurrentRate(value){
     currentRateDisplay.innerText = formattedRate;
     currentRateDisplay.setAttribute("data-rate-value", String(numericValue));
   }
+
+  updateExitShiftUI();
 }
 
 function getWorkerFormFields(){
@@ -491,7 +643,11 @@ async function loadTimeSection(){
   });
 
   try {
-    await loadWorkers();
+    await Promise.allSettled([
+      loadWorkers(),
+      loadCurrentRate()
+    ]);
+    updateExitShiftUI();
     await loadTimeLogs({ showLoader: true });
   } catch (error){
     setGlobalLoader(false);
@@ -642,7 +798,7 @@ async function getWorkersData({ force = false } = {}){
 }
 
 function renderWorkers(workers = currentWorkers){
-  currentWorkers = Array.isArray(workers) ? workers : [];
+  currentWorkers = Array.isArray(workers) ? workers.map(normalizeWorker) : [];
   const searchInput = document.getElementById("workerSearch");
   const cardsContainer = document.getElementById("workersCards");
   const q = (searchInput?.value || "").toLowerCase();
@@ -806,6 +962,7 @@ function fillWorkerSelects(workers){
   }
 
   renderMultiWorkerList(workers);
+  updateExitShiftUI();
 }
 
 async function deleteWorker(id){
@@ -1056,6 +1213,48 @@ function formatAttendanceTime(rawTime){
   });
 }
 
+function formatAttendanceDate(rawTime){
+  if (!rawTime){
+    return "Fecha pendiente";
+  }
+
+  const parsedTime = new Date(rawTime);
+  if (Number.isNaN(parsedTime.getTime())){
+    return "Fecha pendiente";
+  }
+
+  return parsedTime.toLocaleDateString("es-CO", {
+    weekday: "short",
+    day: "numeric",
+    month: "short"
+  }).replace(/\./g, "");
+}
+
+function getLogShiftLabel(log = {}){
+  const explicitLabel = String(log.shiftLabel || log.shift_label || "").trim();
+  if (explicitLabel){
+    return explicitLabel;
+  }
+
+  const shiftType = String(log.shiftType || log.shift_type || "").trim().toLowerCase();
+  const hours = Number(log.hours || log.workedHours || log.durationHours || 0);
+
+  if (shiftType === "8"){
+    return "8 h";
+  }
+
+  if (shiftType === "11"){
+    return "11 h";
+  }
+
+  if (hours > 0){
+    const hoursLabel = formatShiftHours(hours);
+    return shiftType === "manual" ? `Manual ${hoursLabel}` : hoursLabel;
+  }
+
+  return "Turno";
+}
+
 function formatLiquidationDate(rawDate){
   const date = new Date(rawDate);
   if (Number.isNaN(date.getTime())){
@@ -1129,7 +1328,7 @@ function buildBatchAttendanceRows(results, maxRows = 8){
   const rows = visibleRows.map(result => `
     <div class="apple-liquidation-row">
       <span>${escapeHTML(result.name || getWorkerNameById(result.workerId))}</span>
-      <strong>${formatAttendanceTime(result.time)}</strong>
+      <strong>${result.hours ? `${formatShiftHours(result.hours)} - ` : ""}${formatAttendanceTime(result.time)}</strong>
     </div>
   `).join("");
 
@@ -1156,6 +1355,40 @@ function isRetryableAttendanceError(error){
   return /network|fetch|timeout|429|5\d\d|tempor|limit|quota|rate/i.test(message);
 }
 
+function isMissingActiveSessionError(error){
+  if (!error){
+    return false;
+  }
+
+  const message = typeof error === "string"
+    ? error
+    : String(error.message || error.name || error.error || "");
+
+  return /entrada|ingreso|turno|activo|active|abiert|pendiente|inici/i.test(message);
+}
+
+async function apiAttendance(action, workerId, attendanceContext = {}){
+  const firstPayload = await api(action, buildAttendancePayload(action, workerId, attendanceContext));
+  const errorDetail = [
+    firstPayload?.error,
+    firstPayload?.message,
+    firstPayload?.errorMessage
+  ].filter(Boolean).join(" ");
+
+  if (
+    action !== "checkOut" ||
+    !attendanceContext.exitOnly ||
+    !firstPayload?.error ||
+    !isMissingActiveSessionError(errorDetail)
+  ){
+    return firstPayload;
+  }
+
+  await api("checkIn", buildAttendancePayload("checkIn", workerId, attendanceContext));
+  await wait(120);
+  return api("checkOut", buildAttendancePayload("checkOut", workerId, attendanceContext));
+}
+
 function parseWorkerActiveState(activeValue){
   if (typeof activeValue === "boolean"){
     return activeValue;
@@ -1178,9 +1411,78 @@ function parseWorkerActiveState(activeValue){
   return Boolean(activeValue);
 }
 
+function buildAttendancePayload(action, workerId, attendanceContext = {}){
+  const payload = { worker: workerId };
+
+  if (!attendanceContext.exitOnly){
+    return payload;
+  }
+
+  if (action === "checkIn"){
+    return {
+      ...payload,
+      exitOnly: true,
+      syntheticEntry: true,
+      mode: "exitOnly",
+      shiftType: attendanceContext.shiftType,
+      shiftLabel: attendanceContext.shiftLabel,
+      hours: attendanceContext.hours,
+      workedHours: attendanceContext.hours,
+      durationHours: attendanceContext.hours,
+      time: attendanceContext.startISO,
+      start: attendanceContext.startISO,
+      activeStart: attendanceContext.startISO,
+      checkIn: attendanceContext.startISO,
+      checkInTime: attendanceContext.startISO,
+      entrada: attendanceContext.startISO
+    };
+  }
+
+  if (action !== "checkOut"){
+    return payload;
+  }
+
+  return {
+    ...payload,
+    exitOnly: true,
+    checkoutOnly: true,
+    mode: "exitOnly",
+    shiftType: attendanceContext.shiftType,
+    shiftLabel: attendanceContext.shiftLabel,
+    hours: attendanceContext.hours,
+    workedHours: attendanceContext.hours,
+    durationHours: attendanceContext.hours,
+    manualHours: attendanceContext.shiftType === "manual" ? attendanceContext.hours : "",
+    start: attendanceContext.startISO,
+    end: attendanceContext.endISO,
+    checkIn: attendanceContext.startISO,
+    checkOut: attendanceContext.endISO,
+    checkInTime: attendanceContext.startISO,
+    checkOutTime: attendanceContext.endISO,
+    entrada: attendanceContext.startISO,
+    salida: attendanceContext.endISO
+  };
+}
+
+function createExitAttendanceContext(hours){
+  const numericHours = Number(hours);
+  const endDate = new Date();
+  const startDate = new Date(endDate.getTime() - (numericHours * 60 * 60 * 1000));
+
+  return {
+    exitOnly: true,
+    shiftType: exitShiftMode,
+    shiftLabel: formatShiftHours(numericHours),
+    hours: numericHours,
+    startISO: startDate.toISOString(),
+    endISO: endDate.toISOString()
+  };
+}
+
 async function executeAttendanceBatch(action, selectedWorkerIds, {
   maxAttempts = 3,
-  retryDelayMs = 180
+  retryDelayMs = 180,
+  attendanceContext = {}
 } = {}){
   const idsInOrder = [...selectedWorkerIds];
   const resultsByWorkerId = new Map();
@@ -1188,7 +1490,7 @@ async function executeAttendanceBatch(action, selectedWorkerIds, {
 
   for (let attempt = 1; attempt <= maxAttempts && pendingIds.length; attempt += 1){
     const waveResults = await Promise.allSettled(
-      pendingIds.map(workerId => api(action, { worker: workerId }))
+      pendingIds.map(workerId => apiAttendance(action, workerId, attendanceContext))
     );
 
     const retryIds = [];
@@ -1261,7 +1563,8 @@ async function getUnconfirmedAttendanceWorkerIds(action, workerIds, {
 
 async function ensureAttendanceBatchCompletion(action, selectedWorkerIds, settledResults, {
   maxVerifyAttempts = 3,
-  verifyDelayMs = 260
+  verifyDelayMs = 260,
+  attendanceContext = {}
 } = {}){
   const idsInOrder = selectedWorkerIds.map(workerId => String(workerId));
   const resultsByWorkerId = new Map(
@@ -1285,6 +1588,7 @@ async function ensureAttendanceBatchCompletion(action, selectedWorkerIds, settle
   const retryResults = await executeAttendanceBatchSequential(action, unconfirmedIds, {
     maxAttempts: 3,
     retryDelayMs: 150,
+    attendanceContext,
     onProgress: ({ current, total, workerName }) => {
       setGlobalLoader(true, {
         title: "Reintentando marcajes",
@@ -1317,13 +1621,14 @@ async function ensureAttendanceBatchCompletion(action, selectedWorkerIds, settle
   );
 }
 
-function buildAttendanceSummary(settledResults, selectedWorkerIds){
+function buildAttendanceSummary(settledResults, selectedWorkerIds, attendanceContext = {}){
   const successResults = [];
   const failedResults = [];
 
   settledResults.forEach((result, index) => {
     const workerId = selectedWorkerIds[index];
     const fallbackName = getWorkerNameById(workerId);
+    const contextHours = Number(attendanceContext.hours || 0);
 
     if (result.status !== "fulfilled"){
       failedResults.push({ workerId, name: fallbackName });
@@ -1339,15 +1644,21 @@ function buildAttendanceSummary(settledResults, selectedWorkerIds){
     successResults.push({
       workerId,
       name: payload.name || fallbackName,
-      time: payload.time,
-      earned: Number(payload.earned || 0)
+      time: payload.time || payload.end || payload.checkOut || attendanceContext.endISO,
+      hours: Number(payload.hours || payload.workedHours || payload.durationHours || contextHours || 0),
+      earned: Number(
+        payload.earned ||
+        payload.amount ||
+        payload.pay ||
+        (contextHours > 0 ? contextHours * getPayrollRateForWorker(workerId) : 0)
+      )
     });
   });
 
   return { successResults, failedResults };
 }
 
-function applyOptimisticAttendanceState(results, isActive){
+function applyOptimisticAttendanceState(results, isActive, attendanceContext = {}){
   const successfulIds = new Set(
     results
       .filter(result => result?.workerId)
@@ -1358,12 +1669,20 @@ function applyOptimisticAttendanceState(results, isActive){
     return;
   }
 
+  const resultsByWorkerId = new Map(results.map(result => [String(result.workerId), result]));
+
   currentWorkers = currentWorkers.map(worker =>
     successfulIds.has(String(worker.id))
       ? normalizeWorker({
           ...worker,
           active: isActive,
-          activeStart: isActive ? new Date().toISOString() : ""
+          activeStart: isActive ? new Date().toISOString() : "",
+          hours: attendanceContext.exitOnly
+            ? Number(worker.hours || 0) + Number(resultsByWorkerId.get(String(worker.id))?.hours || 0)
+            : Number(worker.hours || 0),
+          pay: attendanceContext.exitOnly
+            ? Number(worker.pay || 0) + Number(resultsByWorkerId.get(String(worker.id))?.earned || 0)
+            : Number(worker.pay || 0)
         })
       : normalizeWorker(worker)
   );
@@ -1373,7 +1692,8 @@ function applyOptimisticAttendanceState(results, isActive){
 async function executeAttendanceBatchSequential(action, selectedWorkerIds, {
   maxAttempts = 2,
   retryDelayMs = 90,
-  onProgress = null
+  onProgress = null,
+  attendanceContext = {}
 } = {}){
   const settledResults = [];
   const totalWorkers = selectedWorkerIds.length;
@@ -1395,7 +1715,7 @@ async function executeAttendanceBatchSequential(action, selectedWorkerIds, {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1){
       try {
-        const payload = await api(action, { worker: workerId });
+        const payload = await apiAttendance(action, workerId, attendanceContext);
         finalResult = { status: "fulfilled", value: payload };
 
         if (!payload?.error){
@@ -1423,8 +1743,9 @@ async function executeAttendanceBatchSequential(action, selectedWorkerIds, {
   return settledResults;
 }
 
-async function registerAttendance(action){
+async function registerAttendance(action, attendanceContext = {}){
   const isCheckIn = action === "checkIn";
+  const isExitOnly = action === "checkOut" && attendanceContext.exitOnly;
   const selectedWorkerIds = getSelectedAttendanceWorkerIds();
 
   if (!selectedWorkerIds.length){
@@ -1440,21 +1761,26 @@ async function registerAttendance(action){
 
   setGlobalLoader(true, {
     title: isCheckIn ? "Registrando entradas" : "Registrando salidas",
-    text: isCheckIn
+    text: isExitOnly
+      ? `Estamos marcando salida por ${attendanceContext.shiftLabel} para la nomina diaria.`
+      : isCheckIn
       ? "Estamos marcando la entrada de los trabajadores seleccionados."
       : "Estamos marcando la salida de los trabajadores seleccionados."
   });
 
   let settledResults = [];
   try {
-    if (selectedWorkerIds.length === 1){
+    if (selectedWorkerIds.length === 1 || isExitOnly){
       settledResults = await executeAttendanceBatchSequential(action, selectedWorkerIds, {
         maxAttempts: 2,
         retryDelayMs: 90,
+        attendanceContext,
         onProgress: ({ current, total, workerName }) => {
           setGlobalLoader(true, {
             title: isCheckIn ? "Registrando entradas" : "Registrando salidas",
-            text: `${current}/${total} - ${workerName}`
+            text: isExitOnly
+              ? `${current}/${total} - ${workerName} - ${attendanceContext.shiftLabel}`
+              : `${current}/${total} - ${workerName}`
           });
         }
       });
@@ -1465,17 +1791,20 @@ async function registerAttendance(action){
       });
       settledResults = await executeAttendanceBatch(action, selectedWorkerIds, {
         maxAttempts: 2,
-        retryDelayMs: 120
+        retryDelayMs: 120,
+        attendanceContext
       });
     }
 
-    settledResults = await ensureAttendanceBatchCompletion(action, selectedWorkerIds, settledResults);
+    settledResults = await ensureAttendanceBatchCompletion(action, selectedWorkerIds, settledResults, {
+      attendanceContext
+    });
   } finally {
     setGlobalLoader(false);
   }
 
-  const { successResults, failedResults } = buildAttendanceSummary(settledResults, selectedWorkerIds);
-  applyOptimisticAttendanceState(successResults, isCheckIn);
+  const { successResults, failedResults } = buildAttendanceSummary(settledResults, selectedWorkerIds, attendanceContext);
+  applyOptimisticAttendanceState(successResults, isCheckIn, attendanceContext);
 
   if (!successResults.length){
     showPremiumModal({
@@ -1491,12 +1820,15 @@ async function registerAttendance(action){
     showPremiumModal({
       icon: "success",
       title: result.name,
-      text: isCheckIn
+      text: isExitOnly
+        ? `Salida registrada ${formatAttendanceTime(result.time)} - ${formatShiftHours(result.hours)} - Ganado ${formatCOP(result.earned)}`
+        : isCheckIn
         ? `Entrada registrada ${formatAttendanceTime(result.time)}`
         : `Salida registrada ${formatAttendanceTime(result.time)} - Ganado ${formatCOP(result.earned)}`
     });
   } else {
     const totalEarned = successResults.reduce((sum, result) => sum + Number(result.earned || 0), 0);
+    const totalHours = successResults.reduce((sum, result) => sum + Number(result.hours || 0), 0);
 
     showPremiumModal({
       icon: failedResults.length ? "warning" : "success",
@@ -1504,6 +1836,7 @@ async function registerAttendance(action){
       html: `
         <div class="apple-liquidation-summary">
           <div class="apple-liquidation-row"><span>Registros exitosos</span><strong>${successResults.length}</strong></div>
+          ${isCheckIn ? "" : `<div class="apple-liquidation-row"><span>Horas registradas</span><strong>${formatHoursValue(totalHours)} h</strong></div>`}
           ${isCheckIn ? "" : `<div class="apple-liquidation-row"><span>Total ganado</span><strong>${formatCOP(totalEarned)}</strong></div>`}
           ${failedResults.length ? `<div class="apple-liquidation-row"><span>Sin registrar</span><strong>${failedResults.length}</strong></div>` : ""}
           ${buildBatchAttendanceRows(successResults)}
@@ -1521,11 +1854,34 @@ async function registerAttendance(action){
 }
 
 async function checkIn(){
-  await registerAttendance("checkIn");
+  await checkOut();
 }
 
 async function checkOut(){
-  await registerAttendance("checkOut");
+  const selectedHours = getSelectedExitHours();
+
+  if (!Number.isFinite(selectedHours) || selectedHours <= 0 || selectedHours > MAX_MANUAL_EXIT_HOURS){
+    await showPremiumModal({
+      icon: "warning",
+      title: "Jornada no valida",
+      text: `Ingresa una duracion mayor a 0 y maximo ${MAX_MANUAL_EXIT_HOURS} horas. Puedes usar 5, 5.5 o 5:30.`
+    });
+    return;
+  }
+
+  const selectedWorkerIds = getSelectedAttendanceWorkerIds();
+  const missingRates = selectedWorkerIds.filter(workerId => getPayrollRateForWorker(workerId) <= 0);
+
+  if (missingRates.length){
+    await showPremiumModal({
+      icon: "warning",
+      title: "Valor por hora requerido",
+      text: "Configura el valor por hora global o individual antes de marcar la salida."
+    });
+    return;
+  }
+
+  await registerAttendance("checkOut", createExitAttendanceContext(selectedHours));
 }
 
 async function refreshLive({ force = false } = {}){
@@ -1902,7 +2258,7 @@ function normalizeWorker(worker = {}){
     hours: Number(worker.hours || 0),
     pay: Number(worker.pay || 0),
     days: Number(worker.days || 0),
-    active: Boolean(worker.active),
+    active: parseWorkerActiveState(worker.active),
     activeStart: worker.activeStart || "",
     lastLiquidation: worker.lastLiquidation || ""
   };
@@ -2275,6 +2631,7 @@ workerSelect.addEventListener("change", () => {
     renderMultiWorkerList(currentWorkers);
   }
 
+  updateExitShiftUI();
   loadTimeLogs({ showLoader: true });
 });
 
@@ -2312,7 +2669,7 @@ async function loadTimeLogs({ showLoader = true, force = false } = {}){
   const workerName = workerSelect.options[workerSelect.selectedIndex]?.text || "este trabajador";
 
   if (!workerId){
-    timeLogsTable.innerHTML = `<tr><td colspan="4" class="time-empty">Selecciona un trabajador para ver los marcajes.</td></tr>`;
+    timeLogsTable.innerHTML = `<tr><td colspan="3" class="time-empty">Selecciona un trabajador para ver los marcajes.</td></tr>`;
     updateTimeCaption("Selecciona un trabajador para ver sus registros.");
     setTimeLoader(false);
     return;
@@ -2331,30 +2688,18 @@ async function loadTimeLogs({ showLoader = true, force = false } = {}){
     });
 
     if (!logs.length){
-      timeLogsTable.innerHTML = `<tr><td colspan="4" class="time-empty">${workerName} aun no tiene marcajes registrados.</td></tr>`;
+      timeLogsTable.innerHTML = `<tr><td colspan="3" class="time-empty">${workerName} aun no tiene marcajes registrados.</td></tr>`;
       return;
     }
 
     timeLogsTable.innerHTML = logs.map(log => {
-      const inDate = new Date(log.start);
-      const outDate = log.end ? new Date(log.end) : null;
-
-      const inFormatted = inDate.toLocaleString("es-CO", {
-        weekday: "short",
-        day: "numeric",
-        month: "short",
-        hour: "2-digit",
-        minute: "2-digit"
-      });
+      const parsedOutDate = log.end || log.checkOut || log.salida
+        ? new Date(log.end || log.checkOut || log.salida)
+        : null;
+      const outDate = parsedOutDate && !Number.isNaN(parsedOutDate.getTime()) ? parsedOutDate : null;
 
       const outFormatted = outDate
-        ? outDate.toLocaleString("es-CO", {
-            weekday: "short",
-            day: "numeric",
-            month: "short",
-            hour: "2-digit",
-            minute: "2-digit"
-          })
+        ? `${formatAttendanceDate(outDate)} - ${getLogShiftLabel(log)}`
         : "Pendiente";
 
       const status = outDate
@@ -2364,14 +2709,13 @@ async function loadTimeLogs({ showLoader = true, force = false } = {}){
       return `
         <tr>
           <td>${log.workerName}</td>
-          <td><span class="time-chip time-chip-in">${inFormatted}</span></td>
           <td>${outDate ? `<span class="time-chip time-chip-out">${outFormatted}</span>` : `<span class="time-chip time-chip-pending">${outFormatted}</span>`}</td>
           <td>${status}</td>
         </tr>
       `;
     }).join("");
   } catch (error){
-    timeLogsTable.innerHTML = `<tr><td colspan="4" class="time-empty">No fue posible cargar los marcajes en este momento.</td></tr>`;
+    timeLogsTable.innerHTML = `<tr><td colspan="3" class="time-empty">No fue posible cargar los marcajes en este momento.</td></tr>`;
     updateTimeCaption(`Hubo un problema cargando los registros de ${workerName}.`);
   } finally {
     setTimeLoader(false);
