@@ -1355,6 +1355,24 @@ function isRetryableAttendanceError(error){
   return /network|fetch|timeout|429|5\d\d|tempor|limit|quota|rate/i.test(message);
 }
 
+function getAttendanceErrorText(payload){
+  if (!payload){
+    return "";
+  }
+
+  if (typeof payload === "string"){
+    return payload;
+  }
+
+  return [
+    payload.error,
+    payload.message,
+    payload.errorMessage,
+    payload.reason,
+    payload.name
+  ].filter(Boolean).join(" ");
+}
+
 function isMissingActiveSessionError(error){
   if (!error){
     return false;
@@ -1504,7 +1522,7 @@ async function executeAttendanceBatch(action, selectedWorkerIds, {
       }
 
       const isRetryable = result.status === "fulfilled"
-        ? isRetryableAttendanceError(result.value?.error)
+        ? isRetryableAttendanceError(getAttendanceErrorText(result.value))
         : isRetryableAttendanceError(result.reason);
 
       if (isRetryable && attempt < maxAttempts){
@@ -1566,6 +1584,10 @@ async function ensureAttendanceBatchCompletion(action, selectedWorkerIds, settle
   verifyDelayMs = 260,
   attendanceContext = {}
 } = {}){
+  if (attendanceContext.exitOnly){
+    return settledResults;
+  }
+
   const idsInOrder = selectedWorkerIds.map(workerId => String(workerId));
   const resultsByWorkerId = new Map(
     idsInOrder.map((workerId, index) => [workerId, settledResults[index]])
@@ -1722,7 +1744,7 @@ async function executeAttendanceBatchSequential(action, selectedWorkerIds, {
           break;
         }
 
-        const shouldRetry = isRetryableAttendanceError(payload.error) && attempt < maxAttempts;
+        const shouldRetry = isRetryableAttendanceError(getAttendanceErrorText(payload)) && attempt < maxAttempts;
         if (!shouldRetry){
           break;
         }
@@ -1770,7 +1792,7 @@ async function registerAttendance(action, attendanceContext = {}){
 
   let settledResults = [];
   try {
-    if (selectedWorkerIds.length === 1 || isExitOnly){
+    if (selectedWorkerIds.length === 1){
       settledResults = await executeAttendanceBatchSequential(action, selectedWorkerIds, {
         maxAttempts: 2,
         retryDelayMs: 90,
@@ -1787,10 +1809,12 @@ async function registerAttendance(action, attendanceContext = {}){
     } else {
       setGlobalLoader(true, {
         title: isCheckIn ? "Registrando entradas" : "Registrando salidas",
-        text: `Procesando ${selectedWorkerIds.length} trabajadores al mismo tiempo.`
+        text: isExitOnly
+          ? `Marcando ${selectedWorkerIds.length} salidas en simultaneo por ${attendanceContext.shiftLabel}.`
+          : `Procesando ${selectedWorkerIds.length} trabajadores al mismo tiempo.`
       });
       settledResults = await executeAttendanceBatch(action, selectedWorkerIds, {
-        maxAttempts: 2,
+        maxAttempts: isExitOnly ? 3 : 2,
         retryDelayMs: 120,
         attendanceContext
       });
@@ -2730,3 +2754,11 @@ setInterval(() => {
     loadDashboard();
   }
 }, 30000);
+
+if ("serviceWorker" in navigator && /^https?:$/.test(window.location.protocol)){
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(error => {
+      console.warn("No se pudo registrar el service worker:", error);
+    });
+  });
+}
