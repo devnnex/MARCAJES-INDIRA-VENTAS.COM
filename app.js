@@ -1,4 +1,4 @@
-const API = "https://script.google.com/macros/s/AKfycbzfxJu_pYR4YZKnhwvYOJxSa9b7f4kLOhxvyqwoGscaJLDOjVW9AZP0bgp3qlcgVRMBsQ/exec";
+const API = "https://script.google.com/macros/s/AKfycbziuBv2yyrX8d9YqiYM6qKDCmRkN6gDc48fmSuvbiNNGknXCFhsNmzrd3BmAixhsn0FVQ/exec";
 
 const COP = new Intl.NumberFormat("es-CO", {
   style: "currency",
@@ -223,6 +223,11 @@ function formatEmailMoney(value){
   return new Intl.NumberFormat("es-CO", {
     maximumFractionDigits: 0
   }).format(Math.round(numericValue));
+}
+
+function toFiniteNumber(value, fallback = 0){
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
 }
 
 function showPremiumModal(options = {}){
@@ -2169,7 +2174,7 @@ async function liquidate(workerId){
     return;
   }
 
-  const targetWorkerData = currentWorkers.find(
+  let targetWorkerData = currentWorkers.find(
     worker => String(worker.id) === targetWorkerId
   );
 
@@ -2179,12 +2184,58 @@ async function liquidate(workerId){
   });
 
   try {
+    const freshWorkers = await getWorkersData({ force: true });
+    renderWorkers(freshWorkers);
+
+    targetWorkerData = currentWorkers.find(
+      worker => String(worker.id) === targetWorkerId
+    ) || targetWorkerData;
+
+    const expectedHours = toFiniteNumber(targetWorkerData?.hours, 0);
+    const expectedAmount = toFiniteNumber(targetWorkerData?.pay, 0);
     const result = await api("liquidateWorker", { worker: targetWorkerId });
+
+    if (result?.error){
+      setGlobalLoader(false);
+      await showPremiumModal({
+        icon: "warning",
+        title: "Liquidacion detenida",
+        text: result.message || "El servidor no encontro saldo valido para liquidar."
+      });
+      return;
+    }
+
+    const resultHours = toFiniteNumber(result?.hours, NaN);
+    const resultAmount = toFiniteNumber(result?.amount, NaN);
+
+    if (!Number.isFinite(resultHours) || !Number.isFinite(resultAmount)){
+      throw new Error("El servidor devolvio una liquidacion con valores no numericos.");
+    }
+
+    if (resultHours <= 0 || resultAmount <= 0){
+      setGlobalLoader(false);
+
+      if (expectedHours > 0 || expectedAmount > 0){
+        await showPremiumModal({
+          icon: "error",
+          title: "Liquidacion incoherente",
+          text: "La tarjeta mostraba saldo pendiente, pero el servidor calculo 0. Refresca y revisa el Apps Script antes de registrar este pago."
+        });
+        return;
+      }
+
+      await showPremiumModal({
+        icon: "info",
+        title: "Sin saldo pendiente",
+        text: "Este trabajador no tiene horas cerradas pendientes por liquidar."
+      });
+      return;
+    }
 
     // 🔹 Datos de liquidación
     const liquidationData = {
-      hours: result.hours,
-      amount: result.amount
+      hours: resultHours,
+      amount: resultAmount
     };
 
     // 🔥 ENVÍO DE CORREO (solo si tiene email)
@@ -2207,8 +2258,8 @@ async function liquidate(workerId){
 
     setGlobalLoader(false);
 
-    const liquidatedAmount = formatCOP(result.amount);
-    const liquidatedHours = formatHoursValue(result.hours);
+    const liquidatedAmount = formatCOP(resultAmount);
+    const liquidatedHours = formatHoursValue(resultHours);
     const workerName = escapeHTML(emailWorkerData.name);
 
     await showPremiumModal({
@@ -2242,7 +2293,7 @@ async function liquidate(workerId){
     await showPremiumModal({
       icon: "error",
       title: "No se pudo liquidar",
-      text: "Intenta nuevamente en unos segundos."
+      text: error?.message || "Intenta nuevamente en unos segundos."
     });
   }
 }
